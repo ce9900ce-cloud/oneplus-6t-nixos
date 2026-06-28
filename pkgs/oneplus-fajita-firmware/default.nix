@@ -14,7 +14,7 @@ stdenvNoCC.mkDerivation {
     owner = "sdm845-mainline";
     repo = "firmware-oneplus-sdm845";
     rev = "176ca713448c5237a983fb1f158cf3a5c251d775";
-    hash = ""; # FIXME: set hash on first build (nix will tell you the correct one)
+    hash = "sha256-ZrBvYO+MY0tlamJngdwhCsI1qpA/2FXoyEys5FAYLj4=";
   };
 
   dontBuild = true;

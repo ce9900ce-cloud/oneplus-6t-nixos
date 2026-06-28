@@ -19,6 +19,7 @@ in
     (import ./mobile-config-firefox.nix self)
     ./plymouth.nix
     ./power-management.nix
+    (import ./camera.nix self)
     ./uboot.nix
     (import ./usb-gadget.nix self)
   ];

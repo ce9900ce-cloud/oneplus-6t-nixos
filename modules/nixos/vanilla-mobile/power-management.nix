@@ -28,7 +28,7 @@ in
         criticalPowerAction = "PowerOff";
       };
 
-      services.tlp.enable = lib.mkDefault true;
+      # tlp.enable = lib.mkDefault true;  # disabled: source hash mismatch in nixpkgs
     })
 
     (lib.mkIf cfg.sleepInhibitors.enableDefault {

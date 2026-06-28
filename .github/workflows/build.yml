@@ -36,13 +36,6 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build U-Boot
-        run: |
-          nix build '.#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot'
-          mkdir -p output-uboot
-          cp result/u-boot.img output-uboot/
-          echo "U-Boot built successfully"
-
       - name: Build NixOS system closure
         run: |
           nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
@@ -60,12 +53,10 @@ jobs:
 
       - name: Populate images
         run: |
-          sudo mkdir -p /mnt/boot
           BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
           ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
           
           sudo mount "$ROOT_DEV" /mnt
-          sudo mkdir -p /mnt/boot
           sudo mount "$BOOT_DEV" /mnt/boot
           
           sudo nixos-install --root /mnt \
@@ -83,17 +74,12 @@ jobs:
           mv nixos-boot.raw nixos-root.raw output-images/
           echo "Images created successfully"
 
-      - name: Verify images
-        run: |
-          ls -lh output-images/
-          file output-images/*.raw
-
-      - name: Upload U-Boot
+      - name: Upload U-Boot (prebuilt)
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: uboot-fajita
-          path: output-uboot/
+          path: uboot-prebuilt/
           retention-days: 7
 
       - name: Upload disk images

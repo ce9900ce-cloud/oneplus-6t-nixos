@@ -17,6 +17,7 @@ in
     enable = lib.mkEnableOption "sdm845";
 
     audio.enable = lib.mkEnableOption "audio";
+    camera.enable = lib.mkEnableOption "camera (libcamera + megapixels)";
     modem.enable = lib.mkEnableOption "modem";
     sensors.enable = lib.mkEnableOption "sensors";
   };
@@ -26,6 +27,7 @@ in
       {
         vanilla-mobile.soc.sdm845 = {
           audio.enable = lib.mkDefault true;
+          camera.enable = lib.mkDefault true;
           modem.enable = lib.mkDefault true;
           sensors.enable = lib.mkDefault true;
         };
@@ -86,6 +88,10 @@ in
         # These devices don't have a writable RTC.
         services.swclock-offset.enable = true;
       }
+      # Camera
+      (lib.mkIf cfg.camera.enable {
+        vanilla-mobile.camera.enable = true;
+      })
       # Audio
       (lib.mkIf cfg.audio.enable {
         vanilla-mobile.alsa-ucm-conf = {

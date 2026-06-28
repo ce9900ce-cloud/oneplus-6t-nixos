@@ -56,6 +56,7 @@ jobs:
           BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
           ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
           
+          sudo mkdir -p /mnt/boot
           sudo mount "$ROOT_DEV" /mnt
           sudo mount "$BOOT_DEV" /mnt/boot
           

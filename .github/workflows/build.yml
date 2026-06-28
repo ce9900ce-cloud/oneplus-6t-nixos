@@ -70,13 +70,14 @@ jobs:
           sudo mount "$BOOT_DEV" /tmp/boot-mnt
           sudo mount "$ROOT_DEV" /tmp/root-mnt
 
-          # Copy NixOS closure to root
-          sudo env PATH="$PATH" nixos-install --root /tmp/root-mnt \
-            --system ./result \
-            --no-root-password \
-            --no-channel-copy \
-            --keep-going \
-            --option binary-caches "https://cache.nixos.org"
+          # Copy NixOS closure to root using nix copy (more reliable than nixos-install)
+          sudo nix copy --to file:///tmp/root-mnt ./result
+
+          # Create minimal fstab for NixOS to find partitions by label
+          sudo tee /tmp/root-mnt/etc/fstab > /dev/null << 'FSTAB'
+          /dev/disk/by-label/nixos-root  /       ext4  defaults,noatime  0 1
+          /dev/disk/by-label/nixos-boot   /boot   vfat  defaults,noatime  0 2
+          FSTAB
 
           # Copy ESP/boot files
           sudo mkdir -p /tmp/boot-mnt/EFI/BOOT

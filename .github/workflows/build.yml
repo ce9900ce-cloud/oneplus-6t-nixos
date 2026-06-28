@@ -35,15 +35,15 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build U-Boot
+      - name: Build NixOS system + U-Boot
         run: |
-          nix build ".#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot"
+          # Build U-Boot first — should hit cache if available
+          nix build '.#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot'
           mkdir -p output-uboot
           cp result/u-boot.img output-uboot/
 
-      - name: Build NixOS system closure
-        run: |
-          nix build ".#nixosConfigurations.oneplus-fajita.config.system.build.toplevel"
+          # Then build the system closure
+          nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
 
       - name: Install tools for image creation
         run: |
@@ -53,40 +53,35 @@ jobs:
         run: |
           dd if=/dev/zero of=nixos-boot.raw bs=1M count=2048 status=progress
           mkfs.vfat -n nixos-boot -S 4096 nixos-boot.raw
-          mkdir -p /tmp/boot-mnt
 
       - name: Create root image (ext4)
         run: |
           dd if=/dev/zero of=nixos-root.raw bs=1M count=4096 status=progress
           mkfs.ext4 -L nixos-root nixos-root.raw
-          mkdir -p /tmp/root-mnt
 
       - name: Populate images
         run: |
-          # Mount the raw images via loop
           BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
           ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
+          sudo mount "$BOOT_DEV" /mnt
+          mkdir -p /mnt/boot-mnt
+          sudo mount "$ROOT_DEV" /mnt/boot-mnt 2>/dev/null || {
+            # Actually mount root to /mnt, boot to /mnt/boot
+            sudo umount /mnt
+            sudo mount "$ROOT_DEV" /mnt
+            sudo mount "$BOOT_DEV" /mnt/boot
+          }
 
-          sudo mount "$BOOT_DEV" /tmp/boot-mnt
-          sudo mount "$ROOT_DEV" /tmp/root-mnt
-
-          # Copy NixOS closure to root
-          sudo nixos-install --root /tmp/root-mnt \
+          sudo nixos-install --root /mnt \
             --system ./result \
             --no-root-password \
             --no-channel-copy \
             --keep-going \
             --option binary-caches "https://cache.nixos.org"
 
-          # Copy ESP/boot files
-          sudo mkdir -p /tmp/boot-mnt/EFI/BOOT
-          sudo cp -r /tmp/root-mnt/boot/* /tmp/boot-mnt/ 2>/dev/null || true
-
-          sudo umount /tmp/boot-mnt
-          sudo umount /tmp/root-mnt
+          sudo umount -R /mnt 2>/dev/null || sync
           sudo losetup -d "$BOOT_DEV"
           sudo losetup -d "$ROOT_DEV"
-
           mkdir -p output-images
           mv nixos-boot.raw nixos-root.raw output-images/
 

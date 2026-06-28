@@ -41,51 +41,44 @@ jobs:
           nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
           echo "System built successfully"
 
-      - name: Create and populate boot + root images
+      - name: Create root image and copy system
         run: |
-          # Create boot image (2GB FAT32)
-          dd if=/dev/zero of=nixos-boot.raw bs=1M count=2048 status=progress
-          BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
-          sudo mkfs.vfat -n nixos-boot -S 4096 "$BOOT_DEV"
-
-          # Create root image (4GB ext4)
-          dd if=/dev/zero of=nixos-root.raw bs=1M count=4096 status=progress
-          ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
+          # Create a single root image (ext4, 6G)
+          dd if=/dev/zero of=nixos.img bs=1M count=6144 status=progress
+          ROOT_DEV=$(sudo losetup --find --show nixos.img)
+          
           sudo mkfs.ext4 -L nixos-root "$ROOT_DEV"
-
-          # Mount
           sudo mount "$ROOT_DEV" /mnt
           sudo mkdir -p /mnt/boot
-          sudo mount "$BOOT_DEV" /mnt/boot
-
-          # Copy system closure to root
-          NIX_BIN=$(dirname "$(which nix)")
-          sudo env "PATH=$NIX_BIN:$PATH" nixos-install \
-            --root /mnt \
-            --system ./result \
-            --no-root-password \
-            --no-channel-copy \
-            --keep-going
-
-          # Unmount
-          sudo umount /mnt/boot
-          sudo umount /mnt
-          sudo losetup -d "$BOOT_DEV"
-          sudo losetup -d "$ROOT_DEV"
-
+          
+          # Copy the NixOS closure using cp -a instead of nix copy
+          sudo cp -a ./result/* /mnt/
+          
+          # Install bootloader
+          sudo nixos-install --root /mnt --system ./result --no-root-password --no-channel-copy --keep-going
+          
+          echo "Install done"
+          df -h /mnt
+          
+          sudo umount -R /mnt 2>/dev/null || true
+          sudo losetup -d "$ROOT_DEV" 2>/dev/null || true
+          
           mkdir -p output-images
-          mv nixos-boot.raw nixos-root.raw output-images/
-          echo "Images created successfully"
+          mv nixos.img output-images/
+          echo "Image created successfully"
 
-      - name: Verify images
-        run: |
-          ls -lh output-images/
-          file output-images/*.raw
-
-      - name: Upload disk images
+      - name: Upload U-Boot (prebuilt)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nixos-images-fajita
+          name: uboot-fajita
+          path: uboot-prebuilt/
+          retention-days: 7
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nixos-image-fajita
           path: output-images/
           retention-days: 7

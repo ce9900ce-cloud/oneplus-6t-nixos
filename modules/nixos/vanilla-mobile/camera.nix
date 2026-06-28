@@ -30,7 +30,6 @@ in
 
       # Camera apps
       megapixels                           # GTK camera app (uses libcamera)
-      libcamera-iq
       libdng                               # DNG/RAW image format support
       libmegapixels                        # Shared lib for megapixels
     ];

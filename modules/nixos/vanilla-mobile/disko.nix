@@ -25,8 +25,6 @@ in
   config = lib.mkIf cfg.enable {
     disko.imageBuilder = {
       imageFormat = "raw";
-      # Our kernels don't have all the modules required for virtualization.
-      kernelPackages = pkgs.linuxPackages;
       useVirtualDevices = false;
     }
     // lib.optionalAttrs (cfg.imageBuildSystem != pkgs.stdenv.buildPlatform.system) {

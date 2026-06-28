@@ -74,6 +74,7 @@ jobs:
           sudo env PATH="$PATH:/nix/var/nix/profiles/default/bin" nix copy --to file:///tmp/root-mnt ./result
 
           # Create minimal fstab for NixOS to find partitions by label
+          sudo mkdir -p /tmp/root-mnt/etc
           sudo tee /tmp/root-mnt/etc/fstab > /dev/null << 'FSTAB'
           /dev/disk/by-label/nixos-root  /       ext4  defaults,noatime  0 1
           /dev/disk/by-label/nixos-boot   /boot   vfat  defaults,noatime  0 2

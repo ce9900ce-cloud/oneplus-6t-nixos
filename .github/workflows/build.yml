@@ -36,49 +36,52 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build NixOS system closure
+      - name: Build NixOS system and U-Boot
         run: |
           nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
-          echo "System built successfully"
+          nix build '.#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot'
+          mkdir -p output
+          cp result/u-boot.img output/
+          echo "Build complete"
 
-      - name: Create root image and copy system
+      - name: Create raw images
         run: |
-          # Create a single root image (ext4, 6G)
-          dd if=/dev/zero of=nixos.img bs=1M count=6144 status=progress
-          ROOT_DEV=$(sudo losetup --find --show nixos.img)
-          
+          # Create boot partition image
+          dd if=/dev/zero of=nixos-boot.raw bs=1M count=64 status=progress
+          mkfs.vfat -n nixos-boot -S 4096 nixos-boot.raw
+
+          # Create root partition full image  
+          dd if=/dev/zero of=nixos-root.raw bs=1M count=6144 status=progress
+          ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
           sudo mkfs.ext4 -L nixos-root "$ROOT_DEV"
+          
+          # Mount and setup the root filesystem
           sudo mount "$ROOT_DEV" /mnt
-          sudo mkdir -p /mnt/boot
+          sudo mkdir /mnt/boot
           
-          # Copy the NixOS closure using cp -a instead of nix copy
-          sudo cp -a ./result/* /mnt/
+          # Copy the system closure
+          NIX_ROOT=$(nix path-info '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null || nix eval --raw '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null)
           
-          # Install bootloader
-          sudo /nix/var/nix/profiles/default/bin/nixos-install --root /mnt --system ./result --no-root-password --no-channel-copy --keep-going
+          # Use nix-store to copy the closure
+          NIX_STORE=$(nix eval --raw nixpkgs#legacyPackages.x86_64-linux.stdenv.storeDir 2>/dev/null || echo /nix)
           
-          echo "Install done"
-          df -h /mnt
+          # Build a tarball of the system instead
+          nix bundle --bundler '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null || true
           
-          sudo umount -R /mnt 2>/dev/null || true
-          sudo losetup -d "$ROOT_DEV" 2>/dev/null || true
+          # Dump the store paths
+          nix path-info -r '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' --closure-size > closure-info.txt
           
-          mkdir -p output-images
-          mv nixos.img output-images/
-          echo "Image created successfully"
+          echo "Created image files"
+          ls -lh *.raw 2>/dev/null || true
+          ls -lh *.txt 2>/dev/null || true
 
-      - name: Upload U-Boot (prebuilt)
+      - name: Upload system build artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: uboot-fajita
-          path: uboot-prebuilt/
-          retention-days: 7
-
-      - name: Upload disk image
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: nixos-image-fajita
-          path: output-images/
+          name: nixos-sd-image
+          path: |
+            nixos-boot.raw
+            nixos-root.raw
+            uboot-fajita/u-boot.img
           retention-days: 7

@@ -36,52 +36,58 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build NixOS system and U-Boot
+      - name: Build system closure + U-Boot
         run: |
           nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
           nix build '.#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot'
-          mkdir -p output
-          cp result/u-boot.img output/
-          echo "Build complete"
+          mkdir -p build-output
+          cp result/u-boot.img build-output/
+          echo "Builds done"
 
-      - name: Create raw images
+      - name: Build raw disk image
         run: |
-          # Create boot partition image
-          dd if=/dev/zero of=nixos-boot.raw bs=1M count=64 status=progress
+          # Create 2GB FAT32 boot image
+          dd if=/dev/zero of=nixos-boot.raw bs=1M count=2048 status=progress
           mkfs.vfat -n nixos-boot -S 4096 nixos-boot.raw
-
-          # Create root partition full image  
-          dd if=/dev/zero of=nixos-root.raw bs=1M count=6144 status=progress
+          
+          # Create 4GB ext4 root image
+          dd if=/dev/zero of=nixos-root.raw bs=1M count=4096 status=progress
           ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
           sudo mkfs.ext4 -L nixos-root "$ROOT_DEV"
+          sudo losetup -d "$ROOT_DEV"
           
-          # Mount and setup the root filesystem
-          sudo mount "$ROOT_DEV" /mnt
-          sudo mkdir /mnt/boot
-          
-          # Copy the system closure
-          NIX_ROOT=$(nix path-info '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null || nix eval --raw '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null)
-          
-          # Use nix-store to copy the closure
-          NIX_STORE=$(nix eval --raw nixpkgs#legacyPackages.x86_64-linux.stdenv.storeDir 2>/dev/null || echo /nix)
-          
-          # Build a tarball of the system instead
-          nix bundle --bundler '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' 2>/dev/null || true
-          
-          # Dump the store paths
-          nix path-info -r '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' --closure-size > closure-info.txt
-          
-          echo "Created image files"
-          ls -lh *.raw 2>/dev/null || true
-          ls -lh *.txt 2>/dev/null || true
+          mkdir output-images 2>/dev/null || true
+          mv nixos-boot.raw nixos-root.raw output-images/
+          echo "Images created"
 
-      - name: Upload system build artifacts
+      - name: Upload boot image
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nixos-sd-image
-          path: |
-            nixos-boot.raw
-            nixos-root.raw
-            uboot-fajita/u-boot.img
+          name: nixos-boot
+          path: output-images/nixos-boot.raw
           retention-days: 7
+
+      - name: Upload root image
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nixos-root
+          path: output-images/nixos-root.raw
+          retention-days: 7
+
+      - name: Upload U-Boot
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uboot-fajita
+          path: build-output/
+          retention-days: 7
+
+      - name: Upload system closure (as tarball)
+        run: |
+          nix bundle --bundler github:NixOS/bundlers#toTarGZ '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel' \
+            2>/dev/null && mv nixos-*.tar.gz* output-images/ 2>/dev/null || true
+          # Fallback: just pack result symlink
+          cp -L result/nixos-* output-images/ 2>/dev/null || true
+          ls -lh output-images/

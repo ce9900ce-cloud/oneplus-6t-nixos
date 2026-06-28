@@ -1,4 +1,4 @@
-name: Build OnePlus 6T Images
+name: Build OnePlus 6T NixOS Images
 
 on:
   push:
@@ -15,8 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # QEMU binfmt is needed to build aarch64-linux on x86_64 runner
-      - name: Install QEMU binfmt
+      - name: Install QEMU binfmt (for aarch64 cross-compile)
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user-static binfmt-support
@@ -27,61 +26,83 @@ jobs:
           extra-conf: |
             accept-flake-config = true
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
-            # Allow building aarch64-linux on x86_64 via QEMU
             extra-platforms = aarch64-linux
             extra-sandbox-paths = /run/binfmt
 
-      - name: Set up Cachix (binary cache)
+      - name: Set up binary caches
         uses: cachix/cachix-action@v16
         with:
           name: vanilla-mobile-nixos
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build disk images
+      - name: Build U-Boot
         run: |
-          nix build \
-            ".#nixosConfigurations.oneplus-fajita.config.system.build.diskoImagesScript" \
-            --option extra-platforms aarch64-linux \
-            --option extra-sandbox-paths /run/binfmt
-
-      - name: Run disko image builder
-        run: |
-          echo "Running disko image builder to create .raw images..."
-          # Create a temp decryption key file for LUKS
-          echo "nixos123" > /tmp/luks-key
-          mkdir -p output-images
-          cd output-images
-          ls ../result
-
-      - name: Build U-Boot image
-        run: |
-          nix build \
-            ".#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot" \
-            --option extra-platforms aarch64-linux \
-            --option extra-sandbox-paths /run/binfmt
+          nix build ".#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot"
           mkdir -p output-uboot
-          cp result/u-boot.img output-uboot/oneplus-fajita-uboot.img
+          cp result/u-boot.img output-uboot/
+
+      - name: Build NixOS system closure
+        run: |
+          nix build ".#nixosConfigurations.oneplus-fajita.config.system.build.toplevel"
+
+      - name: Install tools for image creation
+        run: |
+          sudo apt-get install -y dosfstools cryptsetup-bin
+
+      - name: Create boot image (FAT32)
+        run: |
+          dd if=/dev/zero of=nixos-boot.raw bs=1M count=2048 status=progress
+          mkfs.vfat -n nixos-boot -S 4096 nixos-boot.raw
+          mkdir -p /tmp/boot-mnt
+
+      - name: Create root image (ext4)
+        run: |
+          dd if=/dev/zero of=nixos-root.raw bs=1M count=4096 status=progress
+          mkfs.ext4 -L nixos-root nixos-root.raw
+          mkdir -p /tmp/root-mnt
+
+      - name: Populate images
+        run: |
+          # Mount the raw images via loop
+          BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
+          ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
+
+          sudo mount "$BOOT_DEV" /tmp/boot-mnt
+          sudo mount "$ROOT_DEV" /tmp/root-mnt
+
+          # Copy NixOS closure to root
+          sudo nixos-install --root /tmp/root-mnt \
+            --system ./result \
+            --no-root-password \
+            --no-channel-copy \
+            --keep-going \
+            --option binary-caches "https://cache.nixos.org"
+
+          # Copy ESP/boot files
+          sudo mkdir -p /tmp/boot-mnt/EFI/BOOT
+          sudo cp -r /tmp/root-mnt/boot/* /tmp/boot-mnt/ 2>/dev/null || true
+
+          sudo umount /tmp/boot-mnt
+          sudo umount /tmp/root-mnt
+          sudo losetup -d "$BOOT_DEV"
+          sudo losetup -d "$ROOT_DEV"
+
+          mkdir -p output-images
+          mv nixos-boot.raw nixos-root.raw output-images/
+
+      - name: Upload U-Boot
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uboot-fajita
+          path: output-uboot/
+          retention-days: 7
 
       - name: Upload disk images
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nixos-disk-images-fajita
+          name: nixos-images-fajita
           path: output-images/
           retention-days: 7
-
-      - name: Upload U-Boot image
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: nixos-uboot-fajita
-          path: output-uboot/
-          retention-days: 7
-
-      - name: List all build results
-        if: always()
-        run: |
-          ls -lh result/ 2>/dev/null || echo "no result dir"
-          ls -lh output-images/ 2>/dev/null || echo "no output-images dir"
-          ls -lh output-uboot/ 2>/dev/null || echo "no output-uboot dir"

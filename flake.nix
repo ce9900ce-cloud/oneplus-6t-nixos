@@ -4,14 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    disko = {
-      url = "github:JuneStepp/disko/virtual-devices-option";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
-    { self, nixpkgs, flake-utils, disko, ... }@inputs:
+    { self, nixpkgs, flake-utils, ... }@inputs:
     let
       getDefault =
         system:
@@ -20,11 +16,10 @@
           inherit inputs system;
         };
 
-      # OnePlus 6T NixOS configuration — buildable via GitHub Actions
+      # OnePlus 6T NixOS configuration
       oneplus-fajita-system = nixpkgs.lib.nixosSystem {
         system = "aarch64-linux";
         modules = [
-          disko.nixosModules.disko
           self.nixosModules.vanilla-mobile
           ./examples/installConfigs/oneplus-fajita
         ];
@@ -49,8 +44,6 @@
       }
     ))
     // {
-      # Standalone buildable configuration — not wrapped in eachDefaultSystem
-      # so it stays aarch64-linux regardless of build host.
       nixosConfigurations.oneplus-fajita = oneplus-fajita-system;
     };
 }

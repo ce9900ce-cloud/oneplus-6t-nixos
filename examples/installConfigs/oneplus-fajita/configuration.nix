@@ -10,6 +10,9 @@
 
   vanilla-mobile.device.oneplus-fajita.enable = true;
 
+  # Camera support via libcamera + camss (stalled DT patches — may not work yet)
+  vanilla-mobile.camera.enable = true;
+
   vanilla-mobile.cache.enable = true;
 
   nixpkgs.config.allowUnfreePackages = [

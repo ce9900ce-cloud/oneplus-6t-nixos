@@ -68,7 +68,6 @@ in
           crossPkgs = crossPkgs;
           vanillaMobileCrossPkgs = (self.getPackages crossPkgs);
         };
-        vanilla-mobile.disko.imageBuildSystem = cfg.buildSystem;
       }
       (lib.mkIf cfg.enable {
         services.getty.helpLine = ''

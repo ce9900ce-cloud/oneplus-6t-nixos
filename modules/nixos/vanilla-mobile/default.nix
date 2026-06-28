@@ -14,7 +14,7 @@ in
     ./alsa-ucm-conf.nix
     ./cache.nix
     ./deviceInfo.nix
-    (import ./disko.nix self)
+    # ./disko.nix  # removed — not needed for image builder, only for disko CLI
     (import ./installer.nix self)
     (import ./mobile-config-firefox.nix self)
     ./plymouth.nix

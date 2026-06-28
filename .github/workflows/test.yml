@@ -1,0 +1,8 @@
+name: Smoke Test
+on: [workflow_dispatch]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "GHA works" && uname -a
+      - run: ls /proc/sys/fs/binfmt_misc/ 2>/dev/null || echo "no binfmt"

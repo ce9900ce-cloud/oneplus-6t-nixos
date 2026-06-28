@@ -55,7 +55,7 @@ jobs:
           sudo cp -a ./result/* /mnt/
           
           # Install bootloader
-          sudo nixos-install --root /mnt --system ./result --no-root-password --no-channel-copy --keep-going
+          sudo /nix/var/nix/profiles/default/bin/nixos-install --root /mnt --system ./result --no-root-password --no-channel-copy --keep-going
           
           echo "Install done"
           df -h /mnt

@@ -27,7 +27,6 @@ jobs:
             accept-flake-config = true
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
             extra-platforms = aarch64-linux
-            extra-sandbox-paths = /run/binfmt
 
       - name: Set up binary caches
         uses: cachix/cachix-action@v16
@@ -48,7 +47,7 @@ jobs:
 
       - name: Install tools for image creation
         run: |
-          sudo apt-get install -y dosfstools cryptsetup-bin
+          sudo apt-get install -y dosfstools
 
       - name: Create boot image (FAT32)
         run: |

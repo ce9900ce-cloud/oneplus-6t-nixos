@@ -1,0 +1,122 @@
+# What software should I use?
+
+Depending on your tastes, it's possible to keep your mobile config 95% identical
+to your desktop config or completely custom.
+
+The first choice is what desktop environment to use:
+
+## Desktop Environments
+
+See [here](https://wiki.postmarketos.org/wiki/Category:Interface#Mobile_phones) for an
+overview with pictures of what mobile specific desktop environments are available.
+If you prefer standalone compositors (like I do) and/or want to keep the one you
+use on Desktop, don't worry! This repository has detailed examples for Hyprland and
+some information for other compositors as well.
+
+### Phosh
+
+The primary GNOME stack mobile desktop. A starter config is at
+[examples/desktopEnvironments/phosh/starter.nix](../examples/desktopEnvironments/phosh/starter.nix).
+
+Note that in the starter config, the keyboard seems to currently only show in some
+applications.
+
+See known issues and To-Do items [here](https://github.com/vanilla-mobile-nixos/vanilla-mobile-nixos/issues/4).
+
+### Plasma Mobile
+
+Module is not in nixpkgs yet, but people have worked on it.
+See <https://github.com/NixOS/nixpkgs/issues/432702>.
+
+### Sway or River
+
+The [Hyprland](#hyprland) examples should serve as good reference.
+
+There's also a project called Sxmo or Simple X Mobile dedicated to making these compositors
+work well on mobile. I haven't tested it.
+
+- Auto Screen Rotation: [iio-sway](https://github.com/okeri/iio-sway)
+
+### Hyprland
+
+See `examples/desktopEnvironments/hyprland` in this repository. There are detailed
+examples for mobile, gestures, idle/suspension, and device specific changes.
+
+- Gestures: [hyprgrass](https://github.com/horriblename/hyprgrass)
+- Auto Screen Rotation: [iio-hyprland](https://github.com/JeanSchoeller/iio-hyprland/)
+  - The repository provides a `services.iio-hyprland` Home Manager module.
+
+### Niri
+
+Promising for mobile. Good NixOS support. Have not tested yet.
+
+The [Hyprland](#hyprland) examples should serve as good reference.
+
+- Auto Screen Rotation: [iio-niri](https://github.com/Zhaith-Izaliel/iio-niri)
+    - There's a `services.iio-niri` NixOS module.
+
+### Catacomb
+
+A Wayland compositor made specifically for smart phones. Gestures and window
+management for free. No NixOS support or testing yet.
+
+## General Software
+
+If you're using a desktop environment it may already come with or have recommendations for
+these categories of software.
+
+A great place to browse for mobile friendly apps is <http://linuxphoneapps.org/>.
+
+### Keyboard
+
+- [wvkbd](https://github.com/jjsullivan5196/wvkbd) is simple, compatible, and easy to
+  set up. This repository provides a `programs.wvkbd` Home Manager module.
+- [Stevia](https://gitlab.gnome.org/World/Phosh/stevia) is featureful. I haven't
+  tried to set it up independent of Phosh where it's designed for.
+
+Not all keyboards automatically toggle themselves when text fields are entered or
+left. A solution for fcitx5 users is [fcitx-virtual-keyboard-adapter](https://github.com/horriblename/fcitx-virtualkeyboard-adapter).
+
+### Terminal
+
+There aren't many with support for touch gestures. I recommend using Alacritty.
+
+Supported:
+- [Alacritty](https://alacritty.org/)
+- [Gnome Console](https://apps.gnome.org/Console/)
+  - Only scrolling. No zoom or selection.
+- [QMLKonsole](https://apps.kde.org/qmlkonsole/)
+  - No zoom.
+
+Unsupported:
+- Ghostty
+  - Feature request: <https://github.com/ghostty-org/ghostty/discussions/5562>
+  - Has semi-working scrolling support.
+- Kitty
+  - Feature request: <https://github.com/kovidgoyal/kitty/issues/984>
+- LXTerminal
+  - Only selection.
+- Wezterm
+
+### Browser
+
+There are multiple mobile focused low resource usage browsers available. It's also
+possible to use a mobile customized Firefox. See [Firefox](#firefox).
+
+#### Firefox
+
+Firefox works great on mobile with a few changes from the [mobile-config-firefox](https://gitlab.postmarketos.org/postmarketOS/mobile-config-firefox) project.
+You can easily add this to your existing NixOS or Home Manager Firefox or Librewolf config
+with `vanilla-mobile.mobile-config-firefox.enable = true;`.
+With this enabled, you should use `vanilla-mobile.mobile-config.firefox.firefoxPackage`
+instead of `programs.firefox.package` when you need to change the Firefox package.
+`librewolfPackage` for Librewolf.
+
+Note that if using Librewolf, websites will show their desktop version. This is because
+RFP (resist fingerprinting) disallows changing the user agent string. This will change
+if Librewolf switches to FPP (fingerprinting protection) in the future.
+
+### New/RSS
+
+[Newsflash](https://gitlab.com/news-flash/news_flash_gtk) works well, but has a couple of aspects that could use
+improvement for mobile NixOS. See known issues [here](https://github.com/vanilla-mobile-nixos/vanilla-mobile-nixos/issues/5).

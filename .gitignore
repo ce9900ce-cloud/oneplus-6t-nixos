@@ -1,0 +1,9 @@
+/result*
+/boot.img
+/u-boot.img
+/output-*/
+/venv
+__pycache__/
+*.pyc
+.direnv/
+.envrc

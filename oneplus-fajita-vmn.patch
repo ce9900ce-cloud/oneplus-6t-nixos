@@ -1,0 +1,1057 @@
+diff --git a/docs/oneplus-fajita.md b/docs/oneplus-fajita.md
+new file mode 100644
+index 0000000..f70e386
+--- /dev/null
++++ b/docs/oneplus-fajita.md
+@@ -0,0 +1,228 @@
++# OnePlus 6T (oneplus-fajita)
++
++## Setup Instructions
++
++These instructions require `fastboot`. You can access it with `nix-shell -p android-tools`.
++If you have trouble getting some `fastboot` commands to work, you may need to try other
++USB cables/ports. Plugging into a multi-port external USB hub has worked for me.
++
++### Prep Work
++
++Before installing Linux on the OnePlus 6T:
++
++- **Unlock the bootloader.** Follow the official OnePlus instructions or
++  [LineageOS guide](https://wiki.lineageos.org/devices/fajita/install).
++  Note: Unlocking requires a fresh boot of OxygenOS, and wipes the device.
++- **Update your device's firmware** to the latest available OxygenOS version
++  (Android 11 / 12). The modem firmware is critical for baseband functionality.
++- **Know your device variant.** Only the global version (fajita) is supported.
++  T-Mobile variant (fajitatmo) has a locked bootloader.
++
++### Installing NixOS
++
++Like with the POCO F1, installing NixOS on the OnePlus 6T uses U-Boot to create
++a UEFI boot environment. The process is:
++
++1. Create a simple "install" NixOS configuration for the device.
++2. Use `disko` to build the configuration into flashable images.
++3. Flash U-Boot to the phone.
++4. Flash the NixOS configuration images to the phone.
++5. Boot into NixOS and customize your config.
++
++### NixOS Config
++
++Copy `examples/installConfigs/oneplus-fajita` from this repository
++into your NixOS configuration.
++
++Now:
++- Add `vanilla-mobile-nixos` and `disko` to your inputs.
++- Add the `oneplus-fajita` example as a NixOS configuration.
++- Import the `vanilla-mobile` and `disko` modules in that config.
++
++Here's a simple example of that for flakes:
++
++```nix
++{
++  inputs = {
++    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
++    vanilla-mobile-nixos.url = "github:vanilla-mobile-nixos/vanilla-mobile-nixos";
++    disko = {
++      url = "github:JuneStepp/disko/virtual-devices-option";
++      inputs.nixpkgs.follows = "nixpkgs";
++    };
++  };
++  outputs = { nixpkgs, vanilla-mobile-nixos, disko, ... }: {
++    nixosConfigurations.oneplus-fajita = nixpkgs.lib.nixosSystem {
++      modules = [
++        vanilla-mobile-nixos.nixosModules.vanilla-mobile
++        disko.nixosModules.disko
++        ./hosts/oneplus-fajita/configuration.nix
++      ];
++    };
++  };
++}
++```
++
++For Home Manager users, there's an additional `homeManagerModules.vanilla-mobile` module
++available.
++
++## NixOS Image Building
++
++The OnePlus 6T is an aarch64 device. If you don't have an aarch64 computer to build
++the installer on, you'll have to enable binfmt emulation:
++
++```nix
++boot.binfmt.emulatedSystems = [
++   (lib.mkIf (pkgs.stdenv.hostPlatform.system != "aarch64-linux") "aarch64-linux")
++];
++```
++
++If you enable binfmt, you'll also need to set `vanilla-mobile.installer.buildSystem`
++in your phone config to the output of:
++`nix-instantiate --eval --expr "(import <nixpkgs> {}).stdenv.system"`
++
++### Enable binary cache
++
++Add to your PC's Nix configuration:
++
++```nix
++nix.settings = {
++  trusted-substituters = [
++    "https://vanilla-mobile-nixos.cachix.org"
++  ];
++  trusted-public-keys = [
++    "vanilla-mobile-nixos.cachix.org-1:nicMQxxTD4n6PM9dCvylqsCOCA6M2C6gybbCKrei8AQ="
++  ];
++};
++```
++
++Then build with `--option extra-substituters https://vanilla-mobile-nixos.cachix.org`.
++
++### Build the images
++
++```bash
++nix build .#nixosConfigurations.oneplus-fajita.config.system.build.diskoImagesScript
++```
++
++If using LUKS encryption, run the script with the password:
++
++```bash
++bash -c 'read -s -p "LUKS Password: " p; tmp=$(mktemp); trap "rm \"$tmp\"" EXIT; echo "$p" > "$tmp"; ./result --pre-format-files "$tmp" /tmp/nixos-root.key'
++```
++
++This should create two images: `nixos-boot.raw` and `nixos-root.raw`.
++
++### U-Boot
++
++Build the U-Boot boot image:
++
++```bash
++nix build .#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot
++```
++
++Then flash it to the phone:
++
++1. Reboot the phone into fastboot mode (Power + Vol Up when off, or `adb reboot bootloader`)
++2. Flash U-Boot:
++
++```bash
++fastboot erase dtbo_a
++fastboot erase boot_a
++fastboot flash boot_a result/u-boot.img
++```
++
++3. Do NOT reboot yet.
++
++### NixOS Image Flashing
++
++Flash the images:
++
++```bash
++fastboot flash system_a nixos-boot.raw
++fastboot flash userdata nixos-root.raw
++```
++
++The `userdata` flash may take several minutes. Be patient and don't interrupt it.
++
++After flashing, set the active slot and reboot:
++
++```bash
++fastboot set_active a
++fastboot reboot
++```
++
++The first boot will take a while. DO NOT manually reboot or interrupt.
++
++### SSH Access
++
++Once booted, you should be able to SSH over USB:
++
++```bash
++ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
++  -o PasswordAuthentication=yes -o PreferredAuthentications=password \
++  nixos@172.16.42.1
++```
++
++If you want persistent SSH over USB in your production config:
++
++```nix
++services.openssh = {
++  enable = true;
++  openFirewall = false;
++  listenAddresses = [
++    { addr = config.vanilla-mobile.usb-gadget.network.serverAddress; }
++  ];
++};
++```
++
++After SSH'ing in, switch to USB developer mode by selecting "Developer" in the
++USB notification on the phone.
++
++### Starter Config
++
++First, remove the `vanilla-mobile.installer` section from your configuration.
++Then add your desktop environment and apps. See [What software should I use?](./software-info.md)
++for information and example configs.
++
++Once you've created your starter config, deploy it:
++
++```bash
++nixos-rebuild boot --flake .#oneplus-fajita --target-host "root@172.16.42.1"
++```
++
++### Troubleshooting
++
++- **Phone freezes during boot?** Hold the power button to force restart.
++- **Can't connect via SSH?** Make sure USB developer mode is enabled on the phone.
++- **WiFi issues?** Try connecting to a 2.4GHz network. The 5Ghz band may be unstable
++  on some kernel versions. You can force NetworkManager profiles to use `bg` band:
++  ```nix
++  networking.networkmanager.ensureProfiles.profiles.<NAME>.wifi.band = "bg";
++  ```
++- **Modem not working?** Check that the phone has the latest OxygenOS firmware.
++  If 4G/SMS still don't work, try cold rebooting (power off completely, not just restart).
++- **Unbricking?** If you lose fastboot, you can use the EDL (Emergency Download) mode.
++  See: <https://github.com/pocketblue/oneplus-sdm845-unbrick>
++
++## Hardware Status
++
++| Component           | Status |
++|---------------------|--------|
++| Display/Touch       | ✅ Working |
++| WiFi                | ✅ Working |
++| Bluetooth           | ✅ Working |
++| Audio (speaker)     | ⚠️ Untested |
++| Audio (headset)     | ⚠️ Untested |
++| Microphone          | ⚠️ Untested |
++| Modem (4G)          | ⚠️ Untested (should work) |
++| SMS                 | ⚠️ Untested (should work) |
++| Phone calls         | ⚠️ Untested |
++| GPS                 | ⚠️ Untested |
++| Camera (rear)       | ❌ Not yet supported |
++| Camera (front)      | ❌ Not yet supported |
++| Fingerprint sensor  | ❌ Not yet supported |
++| Sensors (accel/prox)| ⚠️ Untested |
++
++This device is **implemented but untested**. If you have a OnePlus 6T and
++test any of these components, please report your findings by opening an issue
++or pull request!
+diff --git a/examples/installConfigs/oneplus-fajita/configuration.nix b/examples/installConfigs/oneplus-fajita/configuration.nix
+new file mode 100644
+index 0000000..6eaceb8
+--- /dev/null
++++ b/examples/installConfigs/oneplus-fajita/configuration.nix
+@@ -0,0 +1,29 @@
++{
++  pkgs,
++  ...
++}:
++{
++  imports = [
++    ./disko-config.nix
++  ];
++
++  # Remove this after the initial flash.
++  vanilla-mobile.installer = {
++    enable = true;
++    # If using binfmt, set `buildSystem` to the output of:
++    # `nix-instantiate --eval --expr "(import <nixpkgs> {}).stdenv.system"`
++    # buildSystem =
++  };
++
++  vanilla-mobile.device.oneplus-fajita.enable = true;
++
++  # Use the cache, so you don't have to spend hours building kernels.
++  vanilla-mobile.cache.enable = true;
++
++  # Allow using the phone's firmware.
++  nixpkgs.config.allowUnfreePackages = [
++    "oneplus-fajita-firmware"
++  ];
++
++  system.stateVersion = "26.05";
++}
+diff --git a/examples/installConfigs/oneplus-fajita/disko-config.nix b/examples/installConfigs/oneplus-fajita/disko-config.nix
+new file mode 100644
+index 0000000..1b0d6bf
+--- /dev/null
++++ b/examples/installConfigs/oneplus-fajita/disko-config.nix
+@@ -0,0 +1,78 @@
++# This config is NOT meant to be used with the Disko CLI. It should only be used with
++# the Disko image builder. It represents the boot and root images that will be
++# created with Disko image builder and flashed to the mobile device. NixOS is then able
++# to find the partitions using /dev/disk/by-label based on this config.
++{ config, ... }:
++{
++  disko.devices.disk = {
++    boot =
++      let
++        label = "nixos-boot";
++      in
++      {
++        type = "disk";
++        device = "/dev/disk/by-label/${label}";
++        imageName = label;
++        # vfat can't be auto-expanded by NixOS, so the initial image size must be
++        # the final desired size.
++        imageSize = "2G";
++        content = {
++          type = "filesystem";
++          format = "vfat";
++          mountpoint = "/boot";
++          mountOptions = [
++            # `/boot/loader/random-seed` shouldn't be world accessible.
++            "umask=0077"
++            # Continuous Discard/trim For SSDs.
++            "discard"
++          ];
++          extraArgs = [
++            "-n"
++            label
++            "-S"
++            (toString config.vanilla-mobile.deviceInfo.imageSectorSize)
++          ];
++        };
++      };
++    root =
++      let
++        label = "nixos-root";
++      in
++      {
++        type = "disk";
++        device = "/dev/disk/by-label/${label}";
++        imageName = label;
++        # The size of the image that will be flashed. It will expanded to the full
++        # available space once booted into.
++        imageSize = "4G";
++        content = {
++          type = "luks";
++          name = "crypt";
++          settings = {
++            # Enable discard/TRIM support.
++            allowDiscards = true;
++            # Improve SSD performance.
++            bypassWorkqueues = true;
++          };
++          extraFormatArgs = [
++            "--label"
++            label
++            "--sector-size"
++            (toString config.vanilla-mobile.deviceInfo.imageSectorSize)
++          ];
++          # Just for initial encryption in the VM.
++          passwordFile = "/tmp/nixos-root.key";
++
++          content = {
++            type = "filesystem";
++            format = "ext4";
++            mountpoint = "/";
++          };
++        };
++      };
++  };
++
++  vanilla-mobile.disko.enable = true;
++  # To type the decryption password.
++  boot.initrd.unl0kr.enable = true;
++}
+diff --git a/modules/nixos/vanilla-mobile/soc/sdm845/default.nix b/modules/nixos/vanilla-mobile/soc/sdm845/default.nix
+index bfe6567..84658fc 100644
+--- a/modules/nixos/vanilla-mobile/soc/sdm845/default.nix
++++ b/modules/nixos/vanilla-mobile/soc/sdm845/default.nix
+@@ -10,6 +10,7 @@ in
+ {
+   imports = [
+     (import ./xiaomi-beryllium.nix self)
++    (import ./oneplus-fajita.nix self)
+   ];
+ 
+   options.vanilla-mobile.soc.sdm845 = {
+diff --git a/modules/nixos/vanilla-mobile/soc/sdm845/oneplus-fajita.nix b/modules/nixos/vanilla-mobile/soc/sdm845/oneplus-fajita.nix
+new file mode 100644
+index 0000000..cc1b633
+--- /dev/null
++++ b/modules/nixos/vanilla-mobile/soc/sdm845/oneplus-fajita.nix
+@@ -0,0 +1,113 @@
++self:
++{
++  config,
++  lib,
++  ...
++}:
++let
++  cfg = config.vanilla-mobile.device.oneplus-fajita;
++in
++{
++  options.vanilla-mobile.device.oneplus-fajita = {
++    enable = lib.mkEnableOption "OnePlus 6T (oneplus-fajita / sdm845)";
++  };
++
++  config = lib.mkIf cfg.enable {
++    warnings =
++      if !config.boot.loader.systemd-boot.enable then
++        [
++          ''
++            systemd-boot is disabled. oneplus-fajita has currently only
++            been configured/tested for systemd-boot.
++          ''
++        ]
++      else
++        [ ];
++
++    vanilla-mobile = {
++      deviceInfo = {
++        name = "OnePlus 6T";
++        codename = "oneplus-fajita";
++        manufacturer = "OnePlus";
++        dtb = "qcom/sdm845-oneplus-fajita";
++        imageSectorSize = 4096;
++        firmware = self.packages.oneplus-fajita-firmware;
++        uboot = self.packages.ubootPackages."oneplus-fajita-boot-image";
++      };
++      soc.sdm845.enable = true;
++    };
++
++    boot = {
++      kernelParams = [
++        # Look for the firmware we add to `extra-firmware`.
++        "firmware_class.path=/extra-firmware"
++
++        # FIXME: console=ttyMSM0 workaround for display race condition.
++        # See: <https://gitlab.freedesktop.org/drm/msm/-/issues/46>
++        "console=ttyMSM0,115200"
++      ];
++      initrd = {
++        # Based on
++        # <https://gitlab.postmarketos.org/postmarketOS/pmaports/-/blob/master/device/community/device-oneplus-fajita/modules-initfs>
++        kernelModules = [
++          "gpi"
++          "i2c_qcom_geni"
++          "qcom_smbx"
++          "rmi_core"
++          "rmi_i2c"
++          "qcom_spmi_haptics"
++        ];
++
++        systemd.enable = true;
++        systemd.storePaths =
++          map
++            (fw: {
++              source = "${config.hardware.firmware}/lib/firmware/${fw}.zst";
++              target = "/extra-firmware/${fw}.zst";
++            })
++            [
++              # GPU and modem firmware for initramfs.
++              # Based on:
++              # <https://salsa.debian.org/DebianOnMobile-team/qcom-phone-utils/-/blob/debian/latest/initramfs-tools/hooks/qcom-firmware>.
++              "qcom/sdm845/oneplus6/adsp.mbn"
++              "qcom/sdm845/oneplus6/cdsp.mbn"
++              "qcom/sdm845/oneplus6/ipa_fws.mbn"
++              "qcom/sdm845/oneplus6/a630_zap.mbn"
++              "qcom/sdm845/oneplus6/slpi.mbn"
++
++              # WiFi/Bluetooth firmware (WCN3990).
++              "ath10k/WCN3990/hw1.0/board-2.bin"
++              "qca/crbtfw21.tlv"
++              "qca/crnv21.bin"
++
++              # GPU firmware.
++              "qcom/a630_sqe.fw"
++              "qcom/a630_gmu.bin"
++            ];
++      };
++    };
++
++    services.udev.extraRules = ''
++      # Accelerometer mount matrix for iio-sensor-proxy.
++      # Source: <https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/community/device-oneplus-fajita/81-libssc-oneplus-fajita.rules>
++      SUBSYSTEM=="iio", ENV{MODALIAS}=="iio:device*", ATTR{sensors_mount_matrix}="0,-1,0,0,0,-1,1,0,0"
++    '';
++
++    # hexagonrpcd firmware directory for fajita.
++    # Based on pmOS: <https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/community/device-oneplus-fajita/hexagonrpcd.confd>
++    # hexagonrpcd auto-discovers firmware via /share/qcom symlinks,
++    # so we don't need a device-specific config file.
++    # The symlink "fajita -> oneplus6" in the firmware package handles this.
++
++    # q6voiced configuration for fajita.
++    # Based on pmOS: <https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/community/device-oneplus-fajita/q6voiced.conf>
++    services.q6voiced = {
++      enable = true;
++      settings = {
++        q6voice_card = 0;
++        q6voice_device = 6;
++      };
++    };
++
++  };
++}
+diff --git a/pkgs/default.nix b/pkgs/default.nix
+index 8e25404..0289571 100644
+--- a/pkgs/default.nix
++++ b/pkgs/default.nix
+@@ -13,6 +13,7 @@ in
+ 
+   # Firmware
+   xiaomi-beryllium-firmware = callPackage ./xiaomi-beryllium-firmware { };
++  oneplus-fajita-firmware = callPackage ./oneplus-fajita-firmware { };
+ 
+   alsa-ucm-conf-sdm845 = callPackage ./alsa-ucm-conf-sdm845 { };
+ 
+diff --git a/pkgs/oneplus-fajita-firmware/default.nix b/pkgs/oneplus-fajita-firmware/default.nix
+new file mode 100644
+index 0000000..dc0b8a3
+--- /dev/null
++++ b/pkgs/oneplus-fajita-firmware/default.nix
+@@ -0,0 +1,51 @@
++{
++  lib,
++  stdenvNoCC,
++  fetchFromGitLab,
++  runCommand,
++}:
++
++stdenvNoCC.mkDerivation {
++  pname = "oneplus-fajita-firmware";
++  version = "0-unstable-2026-06-27";
++
++  src = fetchFromGitLab {
++    domain = "gitlab.com";
++    owner = "sdm845-mainline";
++    repo = "firmware-oneplus-sdm845";
++    rev = "176ca713448c5237a983fb1f158cf3a5c251d775";
++    hash = ""; # FIXME: set hash on first build (nix will tell you the correct one)
++  };
++
++  dontBuild = true;
++
++  installPhase = ''
++    runHook preInstall
++
++    while IFS="" read -r _i || [ -n "$_i" ]; do
++      install -Dm644 "$_i" "$out/$_i"
++    done < "${./firmware.files}"
++
++    # Files to be included to add sensor support.
++    while IFS="" read -r _i || [ -n "$_i" ]; do
++      install -Dm644 "$_i" "$out/''${_i#"./usr"}"
++    done < "${./sensor.files}"
++
++    # Create symlinks so hexagonrpcd can auto-discover firmware
++    # for both oneplus-enchilada and oneplus-fajita.
++    ln -s oneplus6 "$out/share/qcom/sdm845/OnePlus/enchilada"
++    ln -s oneplus6 "$out/share/qcom/sdm845/OnePlus/fajita"
++
++    runHook postInstall
++  '';
++
++  dontFixup = true;
++
++  meta = {
++    description = "Firmware for OnePlus 6 / 6T (enchilada / fajita)";
++    homepage = "https://gitlab.com/sdm845-mainline/firmware-oneplus-sdm845";
++    license = lib.licenses.unfree;
++    maintainers = with lib.maintainers; [ ];
++    platforms = lib.platforms.all;
++  };
++}
+diff --git a/pkgs/oneplus-fajita-firmware/firmware.files b/pkgs/oneplus-fajita-firmware/firmware.files
+new file mode 100644
+index 0000000..438268f
+--- /dev/null
++++ b/pkgs/oneplus-fajita-firmware/firmware.files
+@@ -0,0 +1,19 @@
++./lib/firmware/postmarketos/tfa98xx.cnt
++./lib/firmware/postmarketos/qca/crbtfw21.tlv
++./lib/firmware/qcom/sdm845/oneplus6/adspr.jsn
++./lib/firmware/qcom/sdm845/oneplus6/adspua.jsn
++./lib/firmware/qcom/sdm845/oneplus6/cdspr.jsn
++./lib/firmware/qcom/sdm845/oneplus6/modemr.jsn
++./lib/firmware/qcom/sdm845/oneplus6/modemuw.jsn
++./lib/firmware/qcom/sdm845/oneplus6/slpir.jsn
++./lib/firmware/qcom/sdm845/oneplus6/slpius.jsn
++./lib/firmware/qcom/sdm845/oneplus6/slpi.mbn
++./lib/firmware/qcom/sdm845/oneplus6/venus.mbn
++./lib/firmware/qcom/sdm845/oneplus6/wlanmdsp.mbn
++./lib/firmware/qcom/sdm845/oneplus6/a630_zap.mbn
++./lib/firmware/qcom/sdm845/oneplus6/adsp.mbn
++./lib/firmware/qcom/sdm845/oneplus6/cdsp.mbn
++./lib/firmware/qcom/sdm845/oneplus6/ipa_fws.mbn
++./lib/firmware/qcom/sdm845/oneplus6/mba.mbn
++./lib/firmware/qcom/sdm845/oneplus6/modem.mbn
++./lib/firmware/qca/oneplus6/crnv21.bin
+\ No newline at end of file
+diff --git a/pkgs/oneplus-fajita-firmware/sensor.files b/pkgs/oneplus-fajita-firmware/sensor.files
+new file mode 100644
+index 0000000..92f0ad3
+--- /dev/null
++++ b/pkgs/oneplus-fajita-firmware/sensor.files
+@@ -0,0 +1,450 @@
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/WmaProDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/map\_SHARED\_LIBS\_845.adsp.prodQ.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/libstabilitydomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/ApeDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/AudioContextDetection.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/SVACmnModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/mmecns\_module.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/AlacDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/FlacDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/fluence\_voiceplus\_module.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/VoiceWakeup\_V2\_Module.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/EtsiEaacPlusEncAndCmnModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/map\_AVS\_SHARED\_LIBS\_845.adsp.prodQ.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/HeaacDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/SAPlusCmnModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/EtsiAmrWbPlusDecModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/libsysmondomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/fastrpc\_shell\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/WmaStdDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/LdacModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/VorbisDecoderModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/libsysmon\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/AudioSphereModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/adsp/CFCMModule.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libbenchmark\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_mvp.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_qbr.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libstabilitydomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_frc.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libhcp\_rpc\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_svc\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_diagtools.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/map\_SHARED\_LIBS\_845.cdsp.prodQ.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libsysmondomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_aie.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libsysmon\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libvpp\_nr.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libc++.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/fastrpc\_shell\_3
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/ubwcdma\_dynlib.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/cdsp/libc++abi.so.1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/fastrpc\_shell\_2
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/libFastRPC\_UTF\_Forward\_800s\_sdm845\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/cellinfo\_tools.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/map\_SSC\_SLPI\_USER\_AAAAAAAAQ.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/libstabilitydomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_app\_coverage.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_drv\_loc.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/sensor\_testapp\_40.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_pal.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_app\_oem.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_app\_coverage2.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/lowi\_client.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_app\_sensor\_cfg.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/libsysmondomain\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_drv\_bt.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/libchre\_slpi\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/libsysmon\_skel.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_drv\_modem.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/map\_SHARED\_LIBS\_AAAAAAAAQ.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_drv\_gf.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/dsp/sdsp/chre\_drv\_wifi.so
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/adsp\_avs\_config.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Headset\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Bluetooth\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_workspaceFile.qwsp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Handset\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Speaker\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Hdmi\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_General\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Global\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/acdb/MTP/MTP\_Codec\_cal.acdb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/sns\_reg.conf
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/sensors\_list.txt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/sns\_reg\_ctrl
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.accel.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_17
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251.ambient\_temperature
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_distance\_bound\_speed\_for\_motion\_states
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_rotv\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.mag.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.als.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.prox.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_smd
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.mag.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.matrix\_value
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0.proximity.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_8
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.als.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0.ambient\_light.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.prox
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.mag.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.gyro.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.ambient\_light
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist.scale\_factor
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_6
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.accel.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_15
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.temp.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.mag.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.gyro.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.game\_rv.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.temp.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.proximity.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.accel.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_aont
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.mag.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.temp.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.accel.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.target\_value\_new
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.motion\_detect.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gravity
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.mag\_cal.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sensors\_settings
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.sensor\_temperature.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.temp.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro\_cal.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.mag.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_1
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.fmv.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_4
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_direct\_channel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_geomag\_rv.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.gyro.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform.als.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_rmd
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_bring\_to\_ear
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_10
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0.proximity
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.accel.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_14
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.sensor\_temperature
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400.rgb.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.gyro.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_16
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.amd
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.island
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_13
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_fmv\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_rotv\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.accel.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.ambient\_light
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_9
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_reg\_config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.rotv
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.linear\_info
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.als.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.rgb.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.prox
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.mag\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_multishake
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.accel.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.mag.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0.mag.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.coefficient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400.als.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist\_s0.compensation\_matrix
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.prox
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.rgb.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.ps
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_12
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.accel.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.ambient\_temperature.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.rgb.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.gyro.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.accel.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.ambient\_light.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.temp.fac\_cal.scale
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.current\_value
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro\_rot\_matrix
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.mag.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.rgb.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.proximity
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_device\_orient\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.temp.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.temp.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.temp.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.accel.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_irq
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_pedometer
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.ambient\_light.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_2
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.accel.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.coefficient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.rgb.rfac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gravity.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251.ambient\_light.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.ambient\_temperature
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_dpc
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.als.afac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist\_s0.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_device\_orient\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.tilt.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.ps.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.game\_rv
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_tilt\_to\_wake
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0.mag.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.motion\_detect
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.accel.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.ambient\_light.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.gyro.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.temp.fac\_cal.scale
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.mag.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_diag\_config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.accel.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.proximity.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.gyro.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.prox.pfac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform.ps
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.geomag\_rv
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.temp.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist\_s0.scale\_factor
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.gyro
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_tilt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.als.afac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist\_s0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.amd.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.fmv
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_3
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702\_platform.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_amd
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.gyro.fac\_cal.corr\_mat
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.rgb.rfac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.prox
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0.sar
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0.mag.config\_2
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.temp.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.coefficient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_basic\_gestures
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_7
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.rotv.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro\_rot\_matrix.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.accel
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.rgb.target\_value
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_fmv\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.accel\_cal.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_diag\_sensor\_datatype
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.temp
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.gyro.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_5
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform.ps.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400.als
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.gyro.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.md
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.temp.fac\_cal.scale
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.ambient\_light
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/ak0991x\_0.mag.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.tilt
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sx932x\_0.sar.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.prox.pfac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_cm
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc5603nj\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0.gyro.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3725\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.gyro.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.rgb
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.geomag\_rv.attr\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0.mag
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/default\_sensors.accel\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tcs3400\_platform.als.fac\_cal
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.mag.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.gyro.fac\_cal.bias
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6ds3c\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251\_platform.placement
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/power.gpio.gpio\_11
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251.ambient\_temperature.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/lsm6dsm\_0\_platform.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_gyro\_cal\_persist.compensation\_matrix
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/apds9251.ambient\_light
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_facing
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/mmc3530kj\_0\_platform.orient
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0.proximity
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_mag\_cal\_config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0.md.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/tmd3702.prox.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/bmi160\_0\_platform.config
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/sns\_geomag\_rv
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk36xx\_0\_platform
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/registry/stk3x3x\_0.ambient\_light
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_dpc.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_default\_sensors.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/lsm6dsm\_0\_8g.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_irq.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/mmc3530kj\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_gyro\_cal.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_tilt\_sw\_enabled.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_svr\_rpr0521rs\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_sx932x\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_ccd.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_rotv.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_distance\_bound.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_bmi160\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_qrd\_power\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_amd\_sw\_disabled.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_heart\_rate.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/lsm6dso\_0\_8g.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_tilt.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_lsm6ds3c\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_fmv.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_device\_orient.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_bmg160\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_facing.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_tcs3400.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_diag\_filter.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_dae.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_mag\_cal.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_amd.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_mmc3530kj\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_mmc5630nj\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/bmi160\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sx932x\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_ccd\_v2\_walk.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/tmd3725.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_geomag\_rv.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/lsm6dst\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_amd\_sw\_enabled.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/stk36xx\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_pedometer.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/tmd3702.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_multishake.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_wrist\_pedo.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_bma2x2\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_ccd\_v3\_walk.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_tmd3725.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_rmd.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/lsm6dso\_0\_16g.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/ak991x\_dri\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_bmm150\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_basic\_gestures.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_cm.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/lsm6dsm\_0\_16g.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/stk3x3x\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_tilt\_to\_wake.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/apds9251.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/tcs3400.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_apds9251.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_tmd3702.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_tilt\_sw\_disabled.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_smd.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_svr\_bma2x2\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_ak991x\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/ak991x\_polling\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_aont.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_mag\_cal\_legacy.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/mmc5603nj\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_power\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_svr\_bmg160\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sns\_bring\_to\_ear.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_stk36xx\_0.json
++./usr/share/qcom/sdm845/OnePlus/oneplus6/sensors/config/sdm845\_stk3x3x\_0.json
+\ No newline at end of file
+diff --git a/pkgs/uboot/default.nix b/pkgs/uboot/default.nix
+index 9f636e5..41cf195 100644
+--- a/pkgs/uboot/default.nix
++++ b/pkgs/uboot/default.nix
+@@ -30,6 +30,16 @@ in
+     uboot = ubootPackages.xiaomi-beryllium-tianma;
+   };
+ 
++  # Based on <https://gitlab.postmarketos.org/tauchgang/tauchgang-ci/-/blob/main/devices.toml>
++  oneplus-fajita = buildTauchgangUBoot {
++    pname = "oneplus-fajita";
++    dtb = "qcom/sdm845-oneplus-fajita";
++    defconfig = "qcom_defconfig qcom-phone.config";
++  };
++  oneplus-fajita-boot-image = mkAndroidBootImage {
++    uboot = ubootPackages.oneplus-fajita;
++  };
++
+   samsung-a2corelte = buildTauchgangUBoot {
+     pname = "samsung-a2corelte";
+     dtb = "exynos/exynos7870-a2corelte";

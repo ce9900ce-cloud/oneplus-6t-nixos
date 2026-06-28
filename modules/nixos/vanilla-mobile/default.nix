@@ -1,0 +1,103 @@
+self:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  cfg = config.vanilla-mobile;
+in
+{
+  imports = [
+    (import ./soc self)
+    ./alsa-ucm-conf.nix
+    ./cache.nix
+    ./deviceInfo.nix
+    (import ./disko.nix self)
+    (import ./installer.nix self)
+    (import ./mobile-config-firefox.nix self)
+    ./plymouth.nix
+    ./power-management.nix
+    ./uboot.nix
+    (import ./usb-gadget.nix self)
+  ];
+
+  options.vanilla-mobile = {
+    enable = lib.mkEnableOption "Vanilla Mobile Nixos";
+  };
+
+  config = lib.mkIf cfg.enable {
+    hardware = {
+      firmware = lib.mkIf (cfg.deviceInfo.firmware != null) (
+        lib.mkAfter [
+          cfg.deviceInfo.firmware
+        ]
+      );
+      deviceTree = lib.mkIf (cfg.deviceInfo.dtb != null) {
+        enable = true;
+        name = cfg.deviceInfo.dtb;
+      };
+    };
+
+    vanilla-mobile = {
+      usb-gadget.enable = lib.mkDefault true;
+
+      powerManagement = {
+        enable = lib.mkDefault true;
+        sleepInhibitors.enableDefault = lib.mkDefault true;
+      };
+
+      plymouth = {
+        mobileTweaks.enable = lib.mkDefault true;
+        unl0krSupport.enable = lib.mkDefault true;
+      };
+    };
+
+    nixpkgs.overlays = [
+      (final: prev: {
+        hyprlandPlugins = prev.hyprlandPlugins // {
+          # Out of date in nixpkgs due to broken package definition.
+          inherit (self.packages) hyprgrass;
+        };
+      })
+    ];
+
+    # Enable Modem Manager quick suspend and resume support. Without it,
+    # Modem Manager will crash and not resume properly after a suspend.
+    # See <https://gitlab.freedesktop.org/mobile-broadband/ModemManager/-/work_items/1039>
+    systemd.services.ModemManager.serviceConfig.ExecStart =
+      lib.mkIf config.networking.modemmanager.enable
+        [
+          "" # Ignore original ExecStart.
+          "${pkgs.modemmanager}/bin/ModemManager --test-quick-suspend-resume"
+        ];
+
+    # People typically have single presses toggle the display/suspend, not a full poweroff.
+    services.logind.settings = {
+      Login.HandlePowerKey = lib.mkDefault "ignore";
+      Login.HandlePowerKeyLongPress = lib.mkDefault "poweroff";
+    };
+
+    services.pipewire.wireplumber.extraConfig."50-mobile-bluetooth" = {
+      "monitor.bluez.properties" = {
+        # Enable HFP/HSP ModemManager support.
+        "bluez5.hfphsp-backend-native-modem" = "any";
+      };
+    };
+
+    # Enable proximity and accel sensors in iio-sensor-proxy.
+    # See <https://gitlab.freedesktop.org/hadess/iio-sensor-proxy/-/merge_requests/409>.
+    services.udev.extraRules = ''
+      ACTION=="remove", GOTO="iio_sensor_proxy_end"
+
+      SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"
+      SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"
+
+      LABEL="iio_sensor_proxy_end"
+    '';
+    # Reduce iio-sensor-proxy timeout to be killed until patch is upstream.
+    # See https://gitlab.freedesktop.org/hadess/iio-sensor-proxy/-/merge_requests/410
+    systemd.services.iio-sensor-proxy.serviceConfig.TimeoutStopSec = 3;
+  };
+}

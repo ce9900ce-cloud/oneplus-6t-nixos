@@ -10,12 +10,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install QEMU binfmt (for aarch64 cross-compile)
+      - name: Install QEMU binfmt
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user-static binfmt-support
@@ -35,19 +36,17 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: nix-community
 
-      - name: Build NixOS system + U-Boot
+      - name: Build U-Boot
         run: |
-          # Build U-Boot first — should hit cache if available
           nix build '.#nixosConfigurations.oneplus-fajita.config.vanilla-mobile.deviceInfo.uboot'
           mkdir -p output-uboot
           cp result/u-boot.img output-uboot/
+          echo "U-Boot built successfully"
 
-          # Then build the system closure
-          nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
-
-      - name: Install tools for image creation
+      - name: Build NixOS system closure
         run: |
-          sudo apt-get install -y dosfstools
+          nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
+          echo "System built successfully"
 
       - name: Create boot image (FAT32)
         run: |
@@ -61,29 +60,33 @@ jobs:
 
       - name: Populate images
         run: |
+          sudo mkdir -p /mnt/boot
           BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
           ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
-          sudo mount "$BOOT_DEV" /mnt
-          mkdir -p /mnt/boot-mnt
-          sudo mount "$ROOT_DEV" /mnt/boot-mnt 2>/dev/null || {
-            # Actually mount root to /mnt, boot to /mnt/boot
-            sudo umount /mnt
-            sudo mount "$ROOT_DEV" /mnt
-            sudo mount "$BOOT_DEV" /mnt/boot
-          }
-
+          
+          sudo mount "$ROOT_DEV" /mnt
+          sudo mkdir -p /mnt/boot
+          sudo mount "$BOOT_DEV" /mnt/boot
+          
           sudo nixos-install --root /mnt \
             --system ./result \
             --no-root-password \
             --no-channel-copy \
             --keep-going \
             --option binary-caches "https://cache.nixos.org"
-
-          sudo umount -R /mnt 2>/dev/null || sync
+          
+          sudo umount -R /mnt 2>/dev/null || true
           sudo losetup -d "$BOOT_DEV"
           sudo losetup -d "$ROOT_DEV"
+          
           mkdir -p output-images
           mv nixos-boot.raw nixos-root.raw output-images/
+          echo "Images created successfully"
+
+      - name: Verify images
+        run: |
+          ls -lh output-images/
+          file output-images/*.raw
 
       - name: Upload U-Boot
         uses: actions/upload-artifact@v4

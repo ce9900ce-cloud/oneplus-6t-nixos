@@ -41,39 +41,31 @@ jobs:
           nix build '.#nixosConfigurations.oneplus-fajita.config.system.build.toplevel'
           echo "System built successfully"
 
-      - name: Create boot image (FAT32)
+      - name: Create root image and copy system
         run: |
-          dd if=/dev/zero of=nixos-boot.raw bs=1M count=2048 status=progress
-          mkfs.vfat -n nixos-boot -S 4096 nixos-boot.raw
-
-      - name: Create root image (ext4)
-        run: |
-          dd if=/dev/zero of=nixos-root.raw bs=1M count=4096 status=progress
-          mkfs.ext4 -L nixos-root nixos-root.raw
-
-      - name: Populate images
-        run: |
-          BOOT_DEV=$(sudo losetup --find --show nixos-boot.raw)
-          ROOT_DEV=$(sudo losetup --find --show nixos-root.raw)
+          # Create a single root image (ext4, 6G)
+          dd if=/dev/zero of=nixos.img bs=1M count=6144 status=progress
+          ROOT_DEV=$(sudo losetup --find --show nixos.img)
           
+          sudo mkfs.ext4 -L nixos-root "$ROOT_DEV"
           sudo mount "$ROOT_DEV" /mnt
           sudo mkdir -p /mnt/boot
-          sudo mount "$BOOT_DEV" /mnt/boot
           
-          sudo nixos-install --root /mnt \
-            --system ./result \
-            --no-root-password \
-            --no-channel-copy \
-            --keep-going \
-            --option binary-caches "https://cache.nixos.org"
+          # Copy the NixOS closure
+          nix copy --to /mnt ./result
+          
+          # Install bootloader
+          sudo nixos-install --root /mnt --system ./result --no-root-password --no-channel-copy --keep-going
+          
+          echo "Install done"
+          df -h /mnt
           
           sudo umount -R /mnt 2>/dev/null || true
-          sudo losetup -d "$BOOT_DEV"
-          sudo losetup -d "$ROOT_DEV"
+          sudo losetup -d "$ROOT_DEV" 2>/dev/null || true
           
           mkdir -p output-images
-          mv nixos-boot.raw nixos-root.raw output-images/
-          echo "Images created successfully"
+          mv nixos.img output-images/
+          echo "Image created successfully"
 
       - name: Upload U-Boot (prebuilt)
         uses: actions/upload-artifact@v4
@@ -83,10 +75,10 @@ jobs:
           path: uboot-prebuilt/
           retention-days: 7
 
-      - name: Upload disk images
+      - name: Upload disk image
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nixos-images-fajita
+          name: nixos-image-fajita
           path: output-images/
           retention-days: 7

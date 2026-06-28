@@ -71,7 +71,7 @@ jobs:
           sudo mount "$ROOT_DEV" /tmp/root-mnt
 
           # Copy NixOS closure to root
-          sudo nixos-install --root /tmp/root-mnt \
+          sudo env PATH="$PATH" nixos-install --root /tmp/root-mnt \
             --system ./result \
             --no-root-password \
             --no-channel-copy \

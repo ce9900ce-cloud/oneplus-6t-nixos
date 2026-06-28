@@ -25,8 +25,14 @@ in
 
     # Install libcamera with qcam test app
     environment.systemPackages = with pkgs; [
-      libcamera
-      (libcamera.override { withQcam = true; })
+      # Camera pipeline
+      (libcamera.override { withQcam = true; })  # libcamera with qcam test app
+
+      # Camera apps
+      megapixels                           # GTK camera app (uses libcamera)
+      libcamera-iq
+      libdng                               # DNG/RAW image format support
+      libmegapixels                        # Shared lib for megapixels
     ];
 
     # udev rules for camera device access

@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     disko = {
-      url = "github:nix-community/disko";
+      url = "github:JuneStepp/disko/virtual-devices-option";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
